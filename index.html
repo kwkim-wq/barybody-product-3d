@@ -6,27 +6,26 @@
   <title>케겔운동기구 3D 뷰어</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a1a1a; font-family: 'Helvetica Neue', sans-serif; overflow: hidden; }
+    body { background: #111; font-family: 'Helvetica Neue', sans-serif; overflow: hidden; }
     #canvas-container { width: 100vw; height: 100vh; }
-    canvas { display: block; }
     #ui {
       position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
-      border: 1px solid rgba(255,255,255,0.15); border-radius: 12px;
-      padding: 12px 24px; color: #fff; text-align: center;
-      pointer-events: none;
+      background: rgba(255,255,255,0.06); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.12); border-radius: 12px;
+      padding: 12px 28px; color: #fff; text-align: center; pointer-events: none;
     }
-    #ui h1 { font-size: 15px; font-weight: 500; letter-spacing: 0.05em; }
-    #ui p { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px; }
+    #ui h1 { font-size: 14px; font-weight: 400; letter-spacing: 0.1em; opacity: 0.9; }
+    #ui p { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 5px; }
     #loading {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      color: #fff; text-align: center;
+      color: #fff; text-align: center; z-index: 100;
     }
     #loading .spinner {
-      width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.2);
-      border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite;
-      margin: 0 auto 12px;
+      width: 36px; height: 36px; border: 2px solid rgba(255,255,255,0.15);
+      border-top-color: rgba(255,255,255,0.8); border-radius: 50%;
+      animation: spin 0.7s linear infinite; margin: 0 auto 14px;
     }
+    #loading p { font-size: 13px; opacity: 0.5; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -34,11 +33,11 @@
   <div id="canvas-container"></div>
   <div id="ui">
     <h1>케겔운동기구 — 직선버전</h1>
-    <p>드래그: 회전 &nbsp;|&nbsp; 스크롤: 줌 &nbsp;|&nbsp; 우클릭 드래그: 이동</p>
+    <p>드래그: 회전 &nbsp;·&nbsp; 스크롤: 줌 &nbsp;·&nbsp; 우클릭: 이동</p>
   </div>
   <div id="loading">
     <div class="spinner"></div>
-    <div>불러오는 중...</div>
+    <p id="loading-text">불러오는 중...</p>
   </div>
 
   <script type="importmap">
@@ -55,119 +54,149 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
     const container = document.getElementById('canvas-container');
+    const W = window.innerWidth, H = window.innerHeight;
 
-    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(W, H);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
+    renderer.toneMappingExposure = 1.2;
     container.appendChild(renderer.domElement);
 
-    // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a1a);
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.001, 100);
-    camera.position.set(0.5, 0.4, 0.5);
+    const camera = new THREE.PerspectiveCamera(40, W / H, 0.001, 50);
+    camera.position.set(0.6, 0.35, 0.6);
 
-    // Controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.minDistance = 0.05;
-    controls.maxDistance = 5;
+    controls.dampingFactor = 0.04;
+    controls.minDistance = 0.1;
+    controls.maxDistance = 3;
+    controls.maxPolarAngle = Math.PI / 2 + 0.1;
 
-    // Lights
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
+    // HDR 환경맵
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    new RGBELoader()
+      .setPath('https://threejs.org/examples/textures/equirectangular/')
+      .load('royal_esplanade_1k.hdr', (hdr) => {
+        const envMap = pmremGenerator.fromEquirectangular(hdr).texture;
+        scene.environment = envMap;
+        hdr.dispose();
+        pmremGenerator.dispose();
+      });
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(1, 2, 1);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
-    scene.add(dirLight);
+    // 그라데이션 배경
+    const bgCanvas = document.createElement('canvas');
+    bgCanvas.width = 2; bgCanvas.height = 512;
+    const bgCtx = bgCanvas.getContext('2d');
+    const grad = bgCtx.createLinearGradient(0, 0, 0, 512);
+    grad.addColorStop(0, '#1e2228');
+    grad.addColorStop(1, '#0c0e11');
+    bgCtx.fillStyle = grad;
+    bgCtx.fillRect(0, 0, 2, 512);
+    scene.background = new THREE.CanvasTexture(bgCanvas);
 
-    const fillLight = new THREE.DirectionalLight(0xb0c8ff, 0.4);
-    fillLight.position.set(-1, 0.5, -1);
-    scene.add(fillLight);
+    // 조명
+    const keyLight = new THREE.DirectionalLight(0xfff5e8, 2.5);
+    keyLight.position.set(1.5, 3, 1.5);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
-    rimLight.position.set(0, -1, -2);
-    scene.add(rimLight);
+    scene.add(Object.assign(new THREE.DirectionalLight(0xc8d8ff, 0.8), { position: new THREE.Vector3(-2, 1, -1) }));
+    scene.add(Object.assign(new THREE.DirectionalLight(0xffffff, 0.4), { position: new THREE.Vector3(0, -1, -2) }));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
 
-    // Ground
-    const groundGeo = new THREE.PlaneGeometry(10, 10);
-    const groundMat = new THREE.ShadowMaterial({ opacity: 0.2 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
+    // 바닥
+    const ground = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 64),
+      new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.7, metalness: 0.05 })
+    );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Load GLB
-    const loader = new GLTFLoader();
-    loader.load(
+    // 후처리
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+
+    const ssaoPass = new SSAOPass(scene, camera, W, H);
+    ssaoPass.kernelRadius = 0.04;
+    ssaoPass.minDistance = 0.001;
+    ssaoPass.maxDistance = 0.05;
+    composer.addPass(ssaoPass);
+
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(W, H), 0.12, 0.4, 0.92);
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+
+    // GLB 로드
+    new GLTFLoader().load(
       '케겔운동기구_직선버전.glb',
       (gltf) => {
         const model = gltf.scene;
-
-        // 그림자
         model.traverse((node) => {
           if (node.isMesh) {
             node.castShadow = true;
             node.receiveShadow = true;
+            if (node.material) node.material.envMapIntensity = 0.9;
           }
         });
 
-        // 중심 정렬
         const box = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
+
         model.position.sub(center);
         model.position.y += size.y / 2;
 
-        // 카메라 거리 자동 조정
-        const maxDim = Math.max(size.x, size.y, size.z);
-        camera.position.set(maxDim * 1.8, maxDim * 1.2, maxDim * 1.8);
-        controls.target.set(0, size.y * 0.3, 0);
+        const d = Math.max(size.x, size.y, size.z);
+        camera.position.set(d * 2, d * 1.2, d * 2);
+        controls.target.set(0, size.y * 0.2, 0);
         controls.update();
 
         ground.position.y = -size.y / 2;
+        ground.scale.setScalar(d * 5);
+        ssaoPass.kernelRadius = d * 0.08;
+        ssaoPass.maxDistance = d * 0.2;
 
         scene.add(model);
         document.getElementById('loading').style.display = 'none';
       },
       (xhr) => {
-        const pct = Math.round(xhr.loaded / xhr.total * 100);
-        document.querySelector('#loading div:last-child').textContent = `불러오는 중... ${pct}%`;
+        if (xhr.total)
+          document.getElementById('loading-text').textContent =
+            `불러오는 중... ${Math.round(xhr.loaded / xhr.total * 100)}%`;
       },
-      (err) => {
-        document.querySelector('#loading div:last-child').textContent = 'GLB 파일을 찾을 수 없습니다.\n같은 폴더에 .glb 파일이 있는지 확인하세요.';
-        console.error(err);
-      }
+      (err) => { console.error(err); }
     );
 
-    // Resize
     window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
+      const w = window.innerWidth, h = window.innerHeight;
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setSize(w, h);
+      composer.setSize(w, h);
     });
 
-    // Animate
-    function animate() {
+    (function animate() {
       requestAnimationFrame(animate);
       controls.update();
-      renderer.render(scene, camera);
-    }
-    animate();
+      composer.render();
+    })();
   </script>
 </body>
 </html>
