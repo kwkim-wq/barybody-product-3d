@@ -13,12 +13,13 @@
       background: rgba(255,255,255,0.06); backdrop-filter: blur(12px);
       border: 1px solid rgba(255,255,255,0.12); border-radius: 12px;
       padding: 12px 28px; color: #fff; text-align: center; pointer-events: none;
+      opacity: 0; transition: opacity 0.5s;
     }
     #ui h1 { font-size: 14px; font-weight: 400; letter-spacing: 0.1em; opacity: 0.9; }
     #ui p { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 5px; }
     #loading {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      color: #fff; text-align: center; z-index: 100;
+      color: #fff; text-align: center; z-index: 100; transition: opacity 0.5s;
     }
     #loading .spinner {
       width: 36px; height: 36px; border: 2px solid rgba(255,255,255,0.15);
@@ -56,7 +57,6 @@
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
     import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
     import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-    import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
     import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
     import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
@@ -75,28 +75,6 @@
 
     const scene = new THREE.Scene();
 
-    const camera = new THREE.PerspectiveCamera(40, W / H, 0.001, 50);
-    camera.position.set(0.6, 0.35, 0.6);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.04;
-    controls.minDistance = 0.1;
-    controls.maxDistance = 3;
-    controls.maxPolarAngle = Math.PI / 2 + 0.1;
-
-    // HDR 환경맵
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    pmremGenerator.compileEquirectangularShader();
-    new RGBELoader()
-      .setPath('https://threejs.org/examples/textures/equirectangular/')
-      .load('royal_esplanade_1k.hdr', (hdr) => {
-        const envMap = pmremGenerator.fromEquirectangular(hdr).texture;
-        scene.environment = envMap;
-        hdr.dispose();
-        pmremGenerator.dispose();
-      });
-
     // 그라데이션 배경
     const bgCanvas = document.createElement('canvas');
     bgCanvas.width = 2; bgCanvas.height = 512;
@@ -108,6 +86,15 @@
     bgCtx.fillRect(0, 0, 2, 512);
     scene.background = new THREE.CanvasTexture(bgCanvas);
 
+    const camera = new THREE.PerspectiveCamera(40, W / H, 0.001, 50);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.04;
+    controls.minDistance = 0.05;
+    controls.maxDistance = 3;
+    controls.maxPolarAngle = Math.PI / 2 + 0.1;
+
     // 조명
     const keyLight = new THREE.DirectionalLight(0xfff5e8, 2.5);
     keyLight.position.set(1.5, 3, 1.5);
@@ -116,9 +103,15 @@
     keyLight.shadow.bias = -0.0005;
     scene.add(keyLight);
 
-    scene.add(Object.assign(new THREE.DirectionalLight(0xc8d8ff, 0.8), { position: new THREE.Vector3(-2, 1, -1) }));
-    scene.add(Object.assign(new THREE.DirectionalLight(0xffffff, 0.4), { position: new THREE.Vector3(0, -1, -2) }));
-    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const fillLight = new THREE.DirectionalLight(0xc8d8ff, 0.8);
+    fillLight.position.set(-2, 1, -1);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    rimLight.position.set(0, -1, -2);
+    scene.add(rimLight);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
     // 바닥
     const ground = new THREE.Mesh(
@@ -129,23 +122,29 @@
     ground.receiveShadow = true;
     scene.add(ground);
 
+    // HDR 환경맵 (실패해도 계속 진행)
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    new RGBELoader()
+      .setPath('https://threejs.org/examples/textures/equirectangular/')
+      .load('royal_esplanade_1k.hdr',
+        (hdr) => {
+          scene.environment = pmrem.fromEquirectangular(hdr).texture;
+          hdr.dispose(); pmrem.dispose();
+        },
+        undefined,
+        () => console.warn('HDR load failed, using lights only')
+      );
+
     // 후처리
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-
-    const ssaoPass = new SSAOPass(scene, camera, W, H);
-    ssaoPass.kernelRadius = 0.04;
-    ssaoPass.minDistance = 0.001;
-    ssaoPass.maxDistance = 0.05;
-    composer.addPass(ssaoPass);
-
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(W, H), 0.12, 0.4, 0.92);
-    composer.addPass(bloomPass);
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.12, 0.4, 0.92));
     composer.addPass(new OutputPass());
 
-    // GLB 로드
+    // GLB 로드 (영문 파일명)
     new GLTFLoader().load(
-      '케겔운동기구_직선버전.glb',
+      'product.glb',
       (gltf) => {
         const model = gltf.scene;
         model.traverse((node) => {
@@ -170,18 +169,24 @@
 
         ground.position.y = -size.y / 2;
         ground.scale.setScalar(d * 5);
-        ssaoPass.kernelRadius = d * 0.08;
-        ssaoPass.maxDistance = d * 0.2;
 
         scene.add(model);
-        document.getElementById('loading').style.display = 'none';
+
+        const loading = document.getElementById('loading');
+        loading.style.opacity = '0';
+        setTimeout(() => loading.style.display = 'none', 500);
+        const ui = document.getElementById('ui');
+        ui.style.opacity = '1';
       },
       (xhr) => {
         if (xhr.total)
           document.getElementById('loading-text').textContent =
             `불러오는 중... ${Math.round(xhr.loaded / xhr.total * 100)}%`;
       },
-      (err) => { console.error(err); }
+      (err) => {
+        document.getElementById('loading-text').textContent = '로드 실패: ' + err.message;
+        console.error(err);
+      }
     );
 
     window.addEventListener('resize', () => {
